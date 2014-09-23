@@ -34,29 +34,31 @@ func main() {
 	for {
 		containers := lxc.GetContainers()
 		for _, container := range containers {
-			mon, err := monitor.NewMonitor(
+			mon, err := monitor.NewCgroup(
 				container,
-				"/sys/fs/cgroup/memory/lxc",
-				"memory.limit_in_bytes",
-				"memory.usage_in_bytes",
+				monitor.PREFIX,
+				monitor.LIMIT,
+				monitor.USAGE,
 			)
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			limit, err := monitor.Get(mon, "limit")
+			limit, err := mon.Get("limit")
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			usage, err := monitor.Get(mon, "usage")
+			usage, err := mon.Get("usage")
 			if err != nil {
 				log.Println(err)
 				continue
 			}
 			if limit == usage {
-				memMon := NewMemoryMonitor(mon, hostIP, config.HostPort)
-				go EnableRedirect(*memMon, monitorTimeout, enabledProxies)
+				memMon := NewMemoryMonitor(mon, hostIP,
+					config.HostPort)
+				go EnableRedirect(*memMon, monitorTimeout,
+					enabledProxies)
 			}
 
 		}
@@ -65,23 +67,26 @@ func main() {
 }
 
 type MemoryMonitor struct {
-	monitor *monitor.Monitor
-	proxy   *proxy.Proxy
+	cgroup *monitor.Cgroup
+	proxy  *proxy.Proxy
 }
 
-func NewMemoryMonitor(monitor *monitor.Monitor, hostIP string, hostPort int) *MemoryMonitor {
+func NewMemoryMonitor(cgroup *monitor.Cgroup,
+	hostIP string, hostPort int) *MemoryMonitor {
 	var memMon MemoryMonitor
-	memMon.monitor = monitor
-	memMon.proxy = proxy.NewProxy(monitor.Container.IP, 80, hostIP, hostPort)
+	memMon.cgroup = cgroup
+	memMon.proxy = proxy.NewProxy(cgroup.Container.IP, 80, hostIP, hostPort)
 	return &memMon
 }
 
-func EnableRedirect(memoryMon MemoryMonitor, pause time.Duration, enabledProxies map[string]bool) {
-	if enabledProxies[memoryMon.monitor.Container.Name] == true {
+func EnableRedirect(memoryMon MemoryMonitor,
+	pause time.Duration, enabledProxies map[string]bool) {
+	if enabledProxies[memoryMon.cgroup.Container.Name] == true {
 		return
 	}
-	log.Printf("Memory of %s has reached the limit. Redirect to webtop enabled\n", memoryMon.monitor.Container.Name)
-	enabledProxies[memoryMon.monitor.Container.Name] = true
+	log.Printf("Memory of %s has reached the limit. ",
+		memoryMon.cgroup.Container.Name)
+	enabledProxies[memoryMon.cgroup.Container.Name] = true
 	err := memoryMon.proxy.Enable()
 	if err != nil {
 		log.Println(err)
@@ -89,19 +94,21 @@ func EnableRedirect(memoryMon MemoryMonitor, pause time.Duration, enabledProxies
 	defer memoryMon.proxy.Disable()
 	for {
 		time.Sleep(pause)
-		limit, err := monitor.Get(memoryMon.monitor, "limit")
+		limit, err := memoryMon.cgroup.Get("limit")
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		usage, err := monitor.Get(memoryMon.monitor, "usage")
+		usage, err := memoryMon.cgroup.Get("usage")
 		if err != nil {
 			log.Println(err)
 			continue
 		}
 		if limit != usage {
-			enabledProxies[memoryMon.monitor.Container.Name] = false
-			log.Printf("Memory of %s availible. Redirect to webtop disabled\n", memoryMon.monitor.Container.Name)
+			enabledProxies[memoryMon.cgroup.Container.Name] = false
+			log.Printf("Memory of %s availible. ",
+				"Redirect to webtop disabled\n",
+				memoryMon.cgroup.Container.Name)
 			return
 		}
 	}
@@ -144,7 +151,7 @@ func GetConfig() *Configuration {
 	return &config
 }
 func handler(w http.ResponseWriter, r *http.Request) {
-	var mon *monitor.Monitor
+	var mon *monitor.Cgroup
 	containerIPs, err := net.LookupIP(r.Host)
 	if err != nil {
 		log.Println(err)
@@ -156,8 +163,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	for _, container := range containers {
 		if container.IP == containerIP {
 			containerName = container.Name
-			mon, err = monitor.NewMonitor(container, "/sys/fs/cgroup/memory/lxc",
-				"memory.limit_in_bytes", "memory.usage_in_bytes")
+			mon, err = monitor.NewCgroup(container,
+				monitor.PREFIX,
+				monitor.LIMIT,
+				monitor.USAGE,
+			)
 			if err != nil {
 				log.Println(err)
 				return
@@ -168,7 +178,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		log.Println("Cannot associate resolved IP to container")
 		return
 	}
-	limit, err := monitor.Get(mon, "limit")
+	limit, err := mon.Get("limit")
 	if err != nil {
 		log.Println(err)
 	}
@@ -177,12 +187,22 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		kill(url[1])
 	}
 	procs := Top(containerName)
-	fmt.Fprintln(w, "<style>tbody tr:hover {\nbackground: #FFEBCD; /* Цвет фона при наведении */\n}</style>")
+	fmt.Fprintln(w, "<style>tbody tr:hover {\nbackground: #FFEBCD; ")
+	fmt.Fprintln(w, "/* Цвет фона при наведении */\n}</style>")
 	fmt.Fprintln(w, "<body>")
-	fmt.Fprintf(w, "<h1 style=\"font-size: 2em; font-family: Ubuntu\" align=center>Память %s исчерпана</h1>", containerName)
-	fmt.Fprintf(w, "<h3 style=\"font-size: 1.2em; font-family: Ubuntu\" align=center>Память %s достигла порогового значения %d Mb. Для продолжения работы необходимо завершить один из процессов</h3>", containerName, limit/1024/1024)
-	fmt.Fprintln(w, "<table width=80% align=center cellspacing=0 cellpadding=3 style=\"font-size: 1.2em; font-family: Ubuntu\">")
-	fmt.Fprintln(w, "<thead><tr><td><b>PID</b></td><td><b>Используемая память</b></td><td><b>Команда</b></td></tr></thead>")
+	fmt.Fprint(w, "<h1 style=\"font-size: 2em; font-family: Ubuntu\"")
+	fmt.Fprintf(w, " align=center>Память %s исчерпана</h1>", containerName)
+	fmt.Fprint(w, "<h3 style=\"font-size: 1.2em; font-family: Ubuntu\"")
+	fmt.Fprint(w, " align=center>Память")
+	fmt.Fprintf(w, "%s достигла порогового значения %d Mb. ",
+		containerName, limit/1024/1024)
+	fmt.Fprint(w, "Для продолжения работы необходимо завершить один из ",
+		"процессов</h3>")
+	fmt.Fprintln(w, "<table width=80% align=center cellspacing=0 ",
+		"cellpadding=3 style=\"font-size: 1.2em; ",
+		"font-family: Ubuntu\">")
+	fmt.Fprintln(w, "<thead><tr><td><b>PID</b></td><td><b>Используемая",
+		" память</b></td><td><b>Команда</b></td></tr></thead>")
 	fmt.Fprintln(w, "<tbody>")
 	for _, proc := range procs {
 		fmt.Fprintln(w, "<tr>")
@@ -198,7 +218,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(w, "<td>%s</td>", field)
 		}
 		if !strings.Contains(proc[2], "/sbin/init") {
-			fmt.Fprintf(w, "<td><a href=/kill/%s>завершить</a></td>", proc[0])
+			fmt.Fprint(w, "<td><a href=/kill/")
+			fmt.Fprintf(w, "%s>завершить</a></td>", proc[0])
 		}
 		fmt.Fprintln(w, "</tr>")
 
@@ -215,7 +236,8 @@ func webserver() {
 }
 
 func Top(container string) [][]string {
-	cmd1 := exec.Command("ps", "-o", "pid,rss,args,cgroup", "-k", "-rss", "-ax")
+	cmd1 := exec.Command("ps", "-o", "pid,rss,args,cgroup",
+		"-k", "-rss", "-ax")
 	cmd2 := exec.Command("grep", container)
 
 	r1, w1 := io.Pipe()
