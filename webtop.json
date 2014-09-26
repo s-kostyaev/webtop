@@ -1,5 +1,0 @@
-{
-    "LookupTimeout": "10s",
-    "MonitorTimeout": "3s",
-    "HostPort": 50000
-}

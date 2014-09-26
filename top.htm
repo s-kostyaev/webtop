@@ -1,0 +1,40 @@
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<style>tbody tr:hover {
+background: #FFEBCD; /* Цвет фона при наведении */
+}</style>
+</head>
+  <body>
+<h1 style="font-size: 2em; font-family: Ubuntu" align="center">
+  Память {{.Name}} исчерпана
+</h1>
+<h3 style="font-size: 1.2em; font-family: Ubuntu" align="center">
+  Память {{.Name}}
+ достигла порогового значения {{.LimitMb}} Mb. Для продолжения работы необходимо
+ завершить один из процессов
+</h3>
+<table style="font-size: 1.2em;  font-family: Ubuntu" width="80%" 
+       align="center" cellpadding="3" cellspacing="0">
+<thead>
+  <tr>
+    <td><b>PID</b></td>
+    <td><b>Используемая  память</b></td>
+    <td><b>Команда</b></td></tr>
+</thead>
+<tbody>
+  {{with .Procs}}
+     {{range .}}
+        <tr>
+           <td>{{.Pid}}</td>
+	   <td>{{.Memory}}</td>
+	   <td>{{.Command}}</td>
+	   {{if ne .Command "/sbin/init"}}
+	       <td><a href=/kill/{{.Pid}}>завершить</a></td>
+	   {{end}}
+	</tr>
+     {{end}}
+  {{end}}
+</tbody>
+</table>
+
+</body></html>
