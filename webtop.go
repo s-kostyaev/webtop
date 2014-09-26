@@ -19,12 +19,12 @@ import (
 )
 
 func main() {
-	go webserver()
-	lookup()
+	config := GetConfig()
+	go webserver(config)
+	lookup(config)
 }
 
-func lookup() {
-	config := GetConfig()
+func lookup(config *Config) {
 	hostIP := getHostIP()
 	enabledProxies := make(map[string]bool)
 	for {
@@ -178,7 +178,11 @@ func (ct ContainerTop) New(name string, limit int) ContainerTop {
 	return ct
 }
 
-func handler(w http.ResponseWriter, r *http.Request) {
+type myTemplate struct {
+	Template *template.Template
+}
+
+func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	var mon *monitor.Cgroup
 	var ct ContainerTop
 	containerIPs, err := net.LookupIP(r.Host)
@@ -214,19 +218,20 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	if url[0] == "kill" {
 		kill(url[1])
 	}
-	tem, err := template.ParseFiles("top.htm")
-	if err != nil {
-		log.Panic(err)
-	}
-	err = tem.Execute(w, ct)
+	err = template.Template.Execute(w, ct)
 	if err != nil {
 		log.Panic(err)
 	}
 }
 
-func webserver() {
-	config := GetConfig()
-	http.HandleFunc("/", handler)
+func webserver(config *Config) {
+	var tem myTemplate
+	var err error
+	tem.Template, err = template.ParseFiles("top.htm")
+	if err != nil {
+		log.Panic(err)
+	}
+	http.HandleFunc("/", tem.handler)
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
 }
 
