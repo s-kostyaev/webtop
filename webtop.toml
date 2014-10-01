@@ -1,3 +1,2 @@
-LookupTimeout = "10s"
-MonitorTimeout = "1s"
+LookupTimeout = "3s"
 HostPort = 50000

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"github.com/s-kostyaev/iptables/proxy"
 	"github.com/s-kostyaev/lxc"
 	"github.com/s-kostyaev/lxc/memory/monitor"
 	"html/template"
@@ -18,111 +17,9 @@ import (
 	"time"
 )
 
-func main() {
-	config := GetConfig()
-	go webserver(config)
-	lookup(config)
-}
-
-func lookup(config *Config) {
-	hostIP := getHostIP()
-	enabledProxies := make(map[string]bool)
-	for {
-		containers := lxc.GetContainers()
-		for _, container := range containers {
-			mon, err := monitor.NewCgroup(
-				container,
-				monitor.PREFIX,
-				monitor.LIMIT,
-				monitor.USAGE,
-			)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			limit, err := mon.Get("limit")
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			usage, err := mon.Get("usage")
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			if limit == usage {
-				memMon := NewMemoryMonitor(mon, hostIP,
-					config.HostPort)
-				go EnableRedirect(*memMon,
-					config.MonitorTimeout,
-					enabledProxies)
-			}
-
-		}
-		time.Sleep(config.LookupTimeout.Duration)
-	}
-}
-
-type MemoryMonitor struct {
-	cgroup *monitor.Cgroup
-	proxy  *proxy.Proxy
-}
-
-func NewMemoryMonitor(cgroup *monitor.Cgroup,
-	hostIP string, hostPort int) *MemoryMonitor {
-	var memMon MemoryMonitor
-	memMon.cgroup = cgroup
-	memMon.proxy = proxy.NewProxy(cgroup.Container.IP, 80, hostIP, hostPort)
-	return &memMon
-}
-
-func EnableRedirect(memoryMon MemoryMonitor,
-	pause duration, enabledProxies map[string]bool) {
-	if enabledProxies[memoryMon.cgroup.Container.Name] == true {
-		return
-	}
-	log.Printf("Memory of %s has reached the limit. ",
-		memoryMon.cgroup.Container.Name)
-	enabledProxies[memoryMon.cgroup.Container.Name] = true
-	err := memoryMon.proxy.Enable()
-	if err != nil {
-		log.Println(err)
-	}
-	defer memoryMon.proxy.Disable()
-	for {
-		time.Sleep(time.Duration(pause.Duration))
-		limit, err := memoryMon.cgroup.Get("limit")
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		usage, err := memoryMon.cgroup.Get("usage")
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		if limit != usage {
-			enabledProxies[memoryMon.cgroup.Container.Name] = false
-			log.Printf("Memory of %s availible. "+
-				"Redirect to webtop disabled\n",
-				memoryMon.cgroup.Container.Name)
-			return
-		}
-	}
-}
-
-func getHostIP() (hostIP string) {
-	hosts, err := net.InterfaceAddrs()
-	if err != nil {
-		log.Fatal(err)
-	}
-	return strings.Split(hosts[1].String(), "/")[0]
-}
-
 type Config struct {
-	LookupTimeout  duration
-	MonitorTimeout duration
-	HostPort       int
+	LookupTimeout duration
+	HostPort      int
 }
 
 type duration struct {
@@ -135,8 +32,8 @@ func (d *duration) UnmarshalText(text []byte) error {
 	return err
 }
 
-func GetConfig() *Config {
-	buf, err := ioutil.ReadFile("/etc/webtop.toml")
+func GetConfig(configPath string) *Config {
+	buf, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -148,19 +45,19 @@ func GetConfig() *Config {
 	return &config
 }
 
-type ContainerTop struct {
+type containerTop struct {
 	Name    string
 	LimitMb int
-	Procs   []Proc
+	Procs   []proc
 }
 
-type Proc struct {
+type proc struct {
 	Pid     string
 	Memory  string
 	Command string
 }
 
-func NewProc(src []string) (proc Proc) {
+func newProc(src []string) (proc proc) {
 	proc.Pid = src[0]
 	mem, err := strconv.Atoi(src[1])
 	if err != nil {
@@ -171,10 +68,10 @@ func NewProc(src []string) (proc Proc) {
 	return proc
 }
 
-func (ct ContainerTop) New(name string, limit int) ContainerTop {
+func (ct containerTop) New(name string, limit int) containerTop {
 	ct.Name = name
 	ct.LimitMb = limit / 1024 / 1024
-	ct.Procs = Top(name)
+	ct.Procs = top(name)
 	return ct
 }
 
@@ -183,8 +80,7 @@ type myTemplate struct {
 }
 
 func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
-	var mon *monitor.Cgroup
-	var ct ContainerTop
+	var ct containerTop
 	containerIPs, err := net.LookupIP(r.Host)
 	if err != nil {
 		log.Println(err)
@@ -194,20 +90,12 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	containers := lxc.GetContainers()
 	for _, container := range containers {
 		if container.IP == containerIP {
-			mon, err = monitor.NewCgroup(container,
-				monitor.PREFIX,
-				monitor.LIMIT,
-				monitor.USAGE,
-			)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			limit, err := mon.Get("limit")
+			limit, err := monitor.Get(container.Name, "limit")
 			if err != nil {
 				log.Println(err)
 			}
 			ct = ct.New(container.Name, limit)
+			break
 		}
 	}
 	if ct.Name == "" {
@@ -224,7 +112,7 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func webserver(config *Config) {
+func Webserver(config *Config) {
 	var tem myTemplate
 	var err error
 	tem.Template, err = template.ParseFiles("top.htm")
@@ -235,27 +123,27 @@ func webserver(config *Config) {
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
 }
 
-func Top(container string) []Proc {
+func top(container string) []proc {
 	cmd := exec.Command("ps", "-o", "pid,rss,args,cgroup",
 		"-k", "-rss", "-ax")
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	cmd.Stdout = &bytes.Buffer{}
 	err := cmd.Run()
 	if err != nil {
 		log.Println(err)
 	}
 
-	var res []Proc
+	res := []proc{}
 
-	results := strings.Split(strings.Trim(out.String(), "\n"), "\n")
+	results := strings.Split(
+		strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n"), "\n")
 	for _, result := range results {
 		var tmp []string
 		buf := strings.Fields(result)
 		if strings.Contains(buf[len(buf)-1], container) {
 			tmp = buf[:2]
 			tmp = append(tmp, strings.Join(buf[2:len(buf)-1], " "))
-			res = append(res, NewProc(tmp))
+			res = append(res, newProc(tmp))
 		}
 	}
 	return res
