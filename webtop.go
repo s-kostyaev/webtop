@@ -90,7 +90,7 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	containers := lxc.GetContainers()
 	for _, container := range containers {
 		if container.IP == containerIP {
-			limit, err := monitor.Get(container.Name, "limit")
+			limit, err := monitor.GetInt(container.Name, "limit")
 			if err != nil {
 				log.Println(err)
 			}

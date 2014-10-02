@@ -43,12 +43,12 @@ func lookup(config *Config) {
 				}
 				continue
 			}
-			limit, err := monitor.Get(container.Name, "limit")
+			limit, err := monitor.GetInt(container.Name, "limit")
 			if err != nil {
 				log.Println(err)
 				continue
 			}
-			usage, err := monitor.Get(container.Name, "usage")
+			usage, err := monitor.GetInt(container.Name, "usage")
 			if err != nil {
 				log.Println(err)
 				continue
