@@ -12,24 +12,13 @@ import (
 
 const (
 	ConfigPath = "/etc/webtop.toml"
+	Comment    = "webtop"
 )
 
 func main() {
 	config := GetConfig(ConfigPath)
 	go Webserver(config)
 	lookup(config)
-}
-
-func filterProxies(proxies []proxy.Proxy,
-	hostIP string, hostPort int) []proxy.Proxy {
-	var filProxies []proxy.Proxy
-	for _, prx := range proxies {
-		if prx.Dest.IP == hostIP &&
-			prx.Dest.Port == hostPort {
-			filProxies = append(filProxies, prx)
-		}
-	}
-	return filProxies
 }
 
 func lookup(config *Config) {
@@ -39,14 +28,13 @@ func lookup(config *Config) {
 		if err != nil {
 			log.Println(err)
 		}
-		enabledProxies = filterProxies(enabledProxies,
-			hostIP, config.HostPort)
+		enabledProxies = proxy.FilterByComment(enabledProxies, Comment)
 		containers := lxc.GetContainers()
 		for _, container := range containers {
 			if container.State != "active" {
 				for _, prx := range enabledProxies {
 					if prx.Source.IP == container.IP {
-						err = prx.DisableRedirect()
+						err = prx.DisableForwarding()
 						if err != nil {
 							log.Println(err)
 						}
@@ -71,7 +59,7 @@ func lookup(config *Config) {
 						log.Printf(
 							"%s: redirect disabled",
 							container.Name)
-						err = prx.DisableRedirect()
+						err = prx.DisableForwarding()
 						if err != nil {
 							log.Println(err)
 						}
@@ -80,12 +68,22 @@ func lookup(config *Config) {
 				}
 				continue
 			}
+			clone := false
+			for _, prx := range enabledProxies {
+				if prx.Source.IP == container.IP {
+					clone = true
+					break
+				}
+			}
+			if clone {
+				continue
+			}
 			log.Printf(
 				"Memory of %s has reached the limit. ",
 				container.Name)
 			prx := proxy.NewProxy(container.IP, 80,
-				hostIP, config.HostPort)
-			err = prx.EnableRedirect()
+				hostIP, config.HostPort, Comment)
+			err = prx.EnableForwarding()
 			if err != nil {
 				log.Println(err)
 			}
@@ -101,4 +99,12 @@ func getHostIP() (hostIP string) {
 		log.Fatal(err)
 	}
 	return strings.Split(hosts[1].String(), "/")[0]
+}
+
+func mapProxies(proxies []proxy.Proxy) map[string]proxy.Proxy {
+	result := make(map[string]proxy.Proxy)
+	for _, prx := range proxies {
+		result[prx.Source.IP] = prx
+	}
+	return result
 }
