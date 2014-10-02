@@ -29,17 +29,17 @@ func lookup(config *Config) {
 			log.Println(err)
 		}
 		enabledProxies = proxy.FilterByComment(enabledProxies, Comment)
+		mappedProxies := mapProxies(enabledProxies)
 		containers := lxc.GetContainers()
 		for _, container := range containers {
 			if container.State != "active" {
-				for _, prx := range enabledProxies {
-					if prx.Source.IP == container.IP {
-						err = prx.DisableForwarding()
-						if err != nil {
-							log.Println(err)
-						}
-						break
+				if prx, ok := mappedProxies[container.IP]; ok {
+					err = prx.DisableForwarding()
+					if err != nil {
+						log.Println(err)
 					}
+					log.Printf("%s: redirect disabled",
+						container.Name)
 				}
 				continue
 			}
@@ -54,28 +54,17 @@ func lookup(config *Config) {
 				continue
 			}
 			if limit != usage {
-				for _, prx := range enabledProxies {
-					if prx.Source.IP == container.IP {
-						log.Printf(
-							"%s: redirect disabled",
-							container.Name)
-						err = prx.DisableForwarding()
-						if err != nil {
-							log.Println(err)
-						}
-						break
+				if prx, ok := mappedProxies[container.IP]; ok {
+					err = prx.DisableForwarding()
+					if err != nil {
+						log.Println(err)
 					}
+					log.Printf("%s: redirect disabled",
+						container.Name)
 				}
 				continue
 			}
-			clone := false
-			for _, prx := range enabledProxies {
-				if prx.Source.IP == container.IP {
-					clone = true
-					break
-				}
-			}
-			if clone {
+			if _, ok := mappedProxies[container.IP]; ok {
 				continue
 			}
 			log.Printf(
