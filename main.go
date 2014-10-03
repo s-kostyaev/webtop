@@ -4,7 +4,6 @@ import (
 	"github.com/op/go-logging"
 	"github.com/s-kostyaev/iptables/proxy"
 	"github.com/s-kostyaev/lxc"
-	"github.com/s-kostyaev/lxc/memory/monitor"
 	"net"
 	"os"
 	"strings"
@@ -64,12 +63,14 @@ func lookup(config *Config) {
 				}
 				continue
 			}
-			limit, err := monitor.GetInt(container.Name, "limit")
+			limit, err := lxc.GetParamInt("memory", container.Name,
+				"limit")
 			if err != nil {
 				Log.Error(err.Error())
 				continue
 			}
-			usage, err := monitor.GetInt(container.Name, "usage")
+			usage, err := lxc.GetParamInt("memory", container.Name,
+				"usage")
 			if err != nil {
 				Log.Error(err.Error())
 				continue

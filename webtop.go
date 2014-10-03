@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/BurntSushi/toml"
 	"github.com/s-kostyaev/lxc"
-	"github.com/s-kostyaev/lxc/memory/monitor"
 	"html/template"
 	"io/ioutil"
 	"net"
@@ -92,7 +91,8 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, container := range containers {
 		if container.IP == containerIP {
-			limit, err := monitor.GetInt(container.Name, "limit")
+			limit, err := lxc.GetParamInt("memory",
+				container.Name, "limit")
 			if err != nil {
 				Log.Error(err.Error())
 			}
