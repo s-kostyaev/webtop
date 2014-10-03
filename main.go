@@ -1,21 +1,39 @@
 package main
 
 import (
+	"github.com/op/go-logging"
 	"github.com/s-kostyaev/iptables/proxy"
 	"github.com/s-kostyaev/lxc"
 	"github.com/s-kostyaev/lxc/memory/monitor"
-	"log"
 	"net"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	ConfigPath = "/etc/webtop.toml"
-	Comment    = "webtop"
+	ConfigPath   = "/etc/webtop.toml"
+	Comment      = "webtop"
+	TemplatePath = "top.htm"
 )
 
+var (
+	Logfile   = os.Stderr
+	Formatter = logging.MustStringFormatter(
+		"%{time:15:04:05.000000} %{pid} %{level:.8s}" +
+			" %{longfile} %{message}")
+	Loglevel = logging.INFO
+	Log      = logging.MustGetLogger("webtop")
+)
+
+func initLog() {
+	logging.SetBackend(logging.NewLogBackend(Logfile, "", 0))
+	logging.SetFormatter(Formatter)
+	logging.SetLevel(Loglevel, Log.Module)
+}
+
 func main() {
+	initLog()
 	config := GetConfig(ConfigPath)
 	go Webserver(config)
 	lookup(config)
@@ -26,40 +44,43 @@ func lookup(config *Config) {
 	for {
 		enabledProxies, err := proxy.GetEnabledProxies()
 		if err != nil {
-			log.Println(err)
+			Log.Error(err.Error())
 		}
 		enabledProxies = proxy.FilterByComment(enabledProxies, Comment)
 		mappedProxies := mapProxies(enabledProxies)
-		containers := lxc.GetContainers()
+		containers, err := lxc.GetContainers()
+		if err != nil {
+			Log.Error(err.Error())
+		}
 		for _, container := range containers {
 			if container.State != "active" {
 				if prx, ok := mappedProxies[container.IP]; ok {
 					err = prx.DisableForwarding()
 					if err != nil {
-						log.Println(err)
+						Log.Error(err.Error())
 					}
-					log.Printf("%s: redirect disabled",
+					Log.Info("%s: redirect disabled",
 						container.Name)
 				}
 				continue
 			}
 			limit, err := monitor.GetInt(container.Name, "limit")
 			if err != nil {
-				log.Println(err)
+				Log.Error(err.Error())
 				continue
 			}
 			usage, err := monitor.GetInt(container.Name, "usage")
 			if err != nil {
-				log.Println(err)
+				Log.Error(err.Error())
 				continue
 			}
 			if limit != usage {
 				if prx, ok := mappedProxies[container.IP]; ok {
 					err = prx.DisableForwarding()
 					if err != nil {
-						log.Println(err)
+						Log.Error(err.Error())
 					}
-					log.Printf("%s: redirect disabled",
+					Log.Info("%s: redirect disabled",
 						container.Name)
 				}
 				continue
@@ -67,14 +88,14 @@ func lookup(config *Config) {
 			if _, ok := mappedProxies[container.IP]; ok {
 				continue
 			}
-			log.Printf(
+			Log.Info(
 				"Memory of %s has reached the limit. ",
 				container.Name)
 			prx := proxy.NewProxy(container.IP, 80,
 				hostIP, config.HostPort, Comment)
 			err = prx.EnableForwarding()
 			if err != nil {
-				log.Println(err)
+				Log.Error(err.Error())
 			}
 
 		}
@@ -85,7 +106,7 @@ func lookup(config *Config) {
 func getHostIP() (hostIP string) {
 	hosts, err := net.InterfaceAddrs()
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatal(err.Error())
 	}
 	return strings.Split(hosts[1].String(), "/")[0]
 }

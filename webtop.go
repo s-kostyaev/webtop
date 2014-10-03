@@ -8,7 +8,6 @@ import (
 	"github.com/s-kostyaev/lxc/memory/monitor"
 	"html/template"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"os/exec"
@@ -35,12 +34,12 @@ func (d *duration) UnmarshalText(text []byte) error {
 func GetConfig(configPath string) *Config {
 	buf, err := ioutil.ReadFile(configPath)
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatal(err.Error())
 	}
 	config := Config{}
 	_, err = toml.Decode(string(buf), &config)
 	if err != nil {
-		log.Fatal(err)
+		Log.Fatal(err.Error())
 	}
 	return &config
 }
@@ -61,7 +60,7 @@ func newProc(src []string) (proc proc) {
 	proc.Pid = src[0]
 	mem, err := strconv.Atoi(src[1])
 	if err != nil {
-		log.Panic(err)
+		Log.Error(err.Error())
 	}
 	proc.Memory = fmt.Sprint(mem / 1024)
 	proc.Command = src[2]
@@ -80,26 +79,29 @@ type myTemplate struct {
 }
 
 func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
-	var ct containerTop
+	ct := containerTop{}
 	containerIPs, err := net.LookupIP(r.Host)
 	if err != nil {
-		log.Println(err)
+		Log.Error(err.Error())
 		return
 	}
 	containerIP := fmt.Sprint(containerIPs[0])
-	containers := lxc.GetContainers()
+	containers, err := lxc.GetContainers()
+	if err != nil {
+		Log.Error(err.Error())
+	}
 	for _, container := range containers {
 		if container.IP == containerIP {
 			limit, err := monitor.GetInt(container.Name, "limit")
 			if err != nil {
-				log.Println(err)
+				Log.Error(err.Error())
 			}
 			ct = ct.New(container.Name, limit)
 			break
 		}
 	}
 	if ct.Name == "" {
-		log.Println("Cannot associate resolved IP to container")
+		Log.Error("Cannot associate resolved IP to container")
 		return
 	}
 	url := strings.Split(strings.Trim(string(r.URL.Path), "/"), "/")
@@ -108,16 +110,16 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	err = template.Template.Execute(w, ct)
 	if err != nil {
-		log.Panic(err)
+		Log.Panic(err.Error())
 	}
 }
 
 func Webserver(config *Config) {
 	var tem myTemplate
 	var err error
-	tem.Template, err = template.ParseFiles("top.htm")
+	tem.Template, err = template.ParseFiles(TemplatePath)
 	if err != nil {
-		log.Panic(err)
+		Log.Panic(err)
 	}
 	http.HandleFunc("/", tem.handler)
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
@@ -130,7 +132,7 @@ func top(container string) []proc {
 	cmd.Stdout = &bytes.Buffer{}
 	err := cmd.Run()
 	if err != nil {
-		log.Println(err)
+		Log.Error(err.Error())
 	}
 
 	res := []proc{}
@@ -138,7 +140,7 @@ func top(container string) []proc {
 	results := strings.Split(
 		strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n"), "\n")
 	for _, result := range results {
-		var tmp []string
+		tmp := []string{}
 		buf := strings.Fields(result)
 		if strings.Contains(buf[len(buf)-1], container) {
 			tmp = buf[:2]
@@ -153,6 +155,6 @@ func kill(pid string) {
 	cmd := exec.Command("kill", "-9", pid)
 	err := cmd.Run()
 	if err != nil {
-		log.Panicln(err)
+		Log.Panic(err.Error())
 	}
 }
