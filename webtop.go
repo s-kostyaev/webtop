@@ -33,12 +33,12 @@ func (d *duration) UnmarshalText(text []byte) error {
 func GetConfig(configPath string) *Config {
 	buf, err := ioutil.ReadFile(configPath)
 	if err != nil {
-		Log.Fatal(err.Error())
+		logger.Fatal(err.Error())
 	}
 	config := Config{}
 	_, err = toml.Decode(string(buf), &config)
 	if err != nil {
-		Log.Fatal(err.Error())
+		logger.Fatal(err.Error())
 	}
 	return &config
 }
@@ -59,7 +59,7 @@ func newProc(src []string) (proc proc) {
 	proc.Pid = src[0]
 	mem, err := strconv.Atoi(src[1])
 	if err != nil {
-		Log.Error(err.Error())
+		logger.Error(err.Error())
 	}
 	proc.Memory = fmt.Sprint(mem / 1024)
 	proc.Command = src[2]
@@ -81,27 +81,26 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	ct := containerTop{}
 	containerIPs, err := net.LookupIP(r.Host)
 	if err != nil {
-		Log.Error(err.Error())
+		logger.Error(err.Error())
 		return
 	}
 	containerIP := fmt.Sprint(containerIPs[0])
 	containers, err := lxc.GetContainers()
 	if err != nil {
-		Log.Error(err.Error())
+		logger.Error(err.Error())
 	}
 	for _, container := range containers {
 		if container.IP == containerIP {
-			limit, err := lxc.GetParamInt("memory",
-				container.Name, "limit")
+			limit, err := lxc.GetParamInt("memory", container.Name, "limit")
 			if err != nil {
-				Log.Error(err.Error())
+				logger.Error(err.Error())
 			}
 			ct = ct.New(container.Name, limit)
 			break
 		}
 	}
 	if ct.Name == "" {
-		Log.Error("Cannot associate resolved IP to container")
+		logger.Error("Cannot associate resolved IP to container")
 		return
 	}
 	url := strings.Split(strings.Trim(string(r.URL.Path), "/"), "/")
@@ -110,29 +109,28 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	err = template.Template.Execute(w, ct)
 	if err != nil {
-		Log.Panic(err.Error())
+		logger.Panic(err.Error())
 	}
 }
 
 func Webserver(config *Config) {
 	var tem myTemplate
 	var err error
-	tem.Template, err = template.ParseFiles(TemplatePath)
+	tem.Template, err = template.ParseFiles(templatePath)
 	if err != nil {
-		Log.Panic(err)
+		logger.Panic(err)
 	}
 	http.HandleFunc("/", tem.handler)
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
 }
 
 func top(container string) []proc {
-	cmd := exec.Command("ps", "-o", "pid,rss,args,cgroup",
-		"-k", "-rss", "-ax")
+	cmd := exec.Command("ps", "-o", "pid,rss,args,cgroup", "-k", "-rss", "-ax")
 
 	cmd.Stdout = &bytes.Buffer{}
 	err := cmd.Run()
 	if err != nil {
-		Log.Error(err.Error())
+		logger.Error(err.Error())
 	}
 
 	res := []proc{}
@@ -155,6 +153,6 @@ func kill(pid string) {
 	cmd := exec.Command("kill", "-9", pid)
 	err := cmd.Run()
 	if err != nil {
-		Log.Panic(err.Error())
+		logger.Panic(err.Error())
 	}
 }

@@ -11,29 +11,28 @@ import (
 )
 
 const (
-	ConfigPath   = "/etc/webtop.toml"
-	Comment      = "webtop"
-	TemplatePath = "top.htm"
+	configPath   = "/etc/webtop.toml"
+	comment      = "webtop"
+	templatePath = "top.htm"
 )
 
 var (
-	Logfile   = os.Stderr
-	Formatter = logging.MustStringFormatter(
-		"%{time:15:04:05.000000} %{pid} %{level:.8s}" +
-			" %{longfile} %{message}")
-	Loglevel = logging.INFO
-	Log      = logging.MustGetLogger("webtop")
+	logfile   = os.Stderr
+	formatter = logging.MustStringFormatter(
+		"%{time:15:04:05.000000} %{pid} %{level:.8s} %{longfile} %{message}")
+	loglevel = logging.INFO
+	logger   = logging.MustGetLogger("webtop")
 )
 
 func initLog() {
-	logging.SetBackend(logging.NewLogBackend(Logfile, "", 0))
-	logging.SetFormatter(Formatter)
-	logging.SetLevel(Loglevel, Log.Module)
+	logging.SetBackend(logging.NewLogBackend(logfile, "", 0))
+	logging.SetFormatter(formatter)
+	logging.SetLevel(loglevel, logger.Module)
 }
 
 func main() {
 	initLog()
-	config := GetConfig(ConfigPath)
+	config := GetConfig(configPath)
 	go Webserver(config)
 	lookup(config)
 }
@@ -43,60 +42,57 @@ func lookup(config *Config) {
 	for {
 		enabledProxies, err := proxy.GetEnabledProxies()
 		if err != nil {
-			Log.Error(err.Error())
+			logger.Error(err.Error())
 		}
-		enabledProxies = proxy.FilterByComment(enabledProxies, Comment)
+		enabledProxies = proxy.FilterByComment(enabledProxies, comment)
 		mappedProxies := mapProxies(enabledProxies)
 		containers, err := lxc.GetContainers()
 		if err != nil {
-			Log.Error(err.Error())
+			logger.Error(err.Error())
 		}
 		for _, container := range containers {
 			if container.State != "active" {
 				if prx, ok := mappedProxies[container.IP]; ok {
 					err = prx.DisableForwarding()
 					if err != nil {
-						Log.Error(err.Error())
+						logger.Error(err.Error())
 					}
-					Log.Info("%s: redirect disabled",
+					logger.Info("%s: redirect disabled",
 						container.Name)
 				}
 				continue
 			}
-			limit, err := lxc.GetParamInt("memory", container.Name,
-				"limit")
+			limit, err := lxc.GetParamInt("memory", container.Name, "limit")
 			if err != nil {
-				Log.Error(err.Error())
+				logger.Error(err.Error())
 				continue
 			}
-			usage, err := lxc.GetParamInt("memory", container.Name,
-				"usage")
+			usage, err := lxc.GetParamInt("memory", container.Name, "usage")
 			if err != nil {
-				Log.Error(err.Error())
+				logger.Error(err.Error())
 				continue
 			}
 			if limit != usage {
 				if prx, ok := mappedProxies[container.IP]; ok {
 					err = prx.DisableForwarding()
 					if err != nil {
-						Log.Error(err.Error())
+						logger.Error(err.Error())
 					}
-					Log.Info("%s: redirect disabled",
-						container.Name)
+					logger.Info("%s: redirect disabled", container.Name)
 				}
 				continue
 			}
 			if _, ok := mappedProxies[container.IP]; ok {
 				continue
 			}
-			Log.Info(
+			logger.Info(
 				"Memory of %s has reached the limit. ",
 				container.Name)
 			prx := proxy.NewProxy(container.IP, 80,
-				hostIP, config.HostPort, Comment)
+				hostIP, config.HostPort, comment)
 			err = prx.EnableForwarding()
 			if err != nil {
-				Log.Error(err.Error())
+				logger.Error(err.Error())
 			}
 
 		}
@@ -107,7 +103,7 @@ func lookup(config *Config) {
 func getHostIP() (hostIP string) {
 	hosts, err := net.InterfaceAddrs()
 	if err != nil {
-		Log.Fatal(err.Error())
+		logger.Fatal(err.Error())
 	}
 	return strings.Split(hosts[1].String(), "/")[0]
 }
