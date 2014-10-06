@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"github.com/brnv/go-heaver"
 	"github.com/op/go-logging"
-	"github.com/s-kostyaev/iptables/proxy"
-	"github.com/s-kostyaev/lxc"
-	"net"
+	"github.com/s-kostyaev/go-cgroup"
+	"github.com/s-kostyaev/go-iptables-proxy"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -33,12 +35,13 @@ func initLog() {
 func main() {
 	initLog()
 	config := GetConfig(configPath)
+	checkLocalNetRoute()
 	go Webserver(config)
 	lookup(config)
 }
 
 func lookup(config *Config) {
-	hostIP := getHostIP()
+	hostIP := "127.0.0.1"
 	for {
 		enabledProxies, err := proxy.GetEnabledProxies()
 		if err != nil {
@@ -46,13 +49,13 @@ func lookup(config *Config) {
 		}
 		enabledProxies = proxy.FilterByComment(enabledProxies, comment)
 		mappedProxies := mapProxies(enabledProxies)
-		containers, err := lxc.GetContainers()
+		containers, err := heaver.List("local")
 		if err != nil {
 			logger.Error(err.Error())
 		}
 		for _, container := range containers {
-			if container.State != "active" {
-				if prx, ok := mappedProxies[container.IP]; ok {
+			if container.Status != "active" {
+				if prx, ok := mappedProxies[container.Ip]; ok {
 					err = prx.DisableForwarding()
 					if err != nil {
 						logger.Error(err.Error())
@@ -62,18 +65,28 @@ func lookup(config *Config) {
 				}
 				continue
 			}
-			limit, err := lxc.GetParamInt("memory", container.Name, "limit")
+			limit, err := cgroup.GetParamInt("memory/lxc/"+container.Name,
+				cgroup.MemoryLimit)
 			if err != nil {
-				logger.Error(err.Error())
-				continue
+				limit, err = cgroup.GetParamInt("memory/lxc/"+container.Name+
+					"-1", cgroup.MemoryLimit)
+				if err != nil {
+					logger.Error(err.Error())
+					continue
+				}
 			}
-			usage, err := lxc.GetParamInt("memory", container.Name, "usage")
+			usage, err := cgroup.GetParamInt("memory/lxc/"+container.Name,
+				cgroup.MemoryUsage)
 			if err != nil {
-				logger.Error(err.Error())
-				continue
+				usage, err = cgroup.GetParamInt("memory/lxc/"+container.Name+
+					"-1", cgroup.MemoryUsage)
+				if err != nil {
+					logger.Error(err.Error())
+					continue
+				}
 			}
 			if limit != usage {
-				if prx, ok := mappedProxies[container.IP]; ok {
+				if prx, ok := mappedProxies[container.Ip]; ok {
 					err = prx.DisableForwarding()
 					if err != nil {
 						logger.Error(err.Error())
@@ -82,13 +95,13 @@ func lookup(config *Config) {
 				}
 				continue
 			}
-			if _, ok := mappedProxies[container.IP]; ok {
+			if _, ok := mappedProxies[container.Ip]; ok {
 				continue
 			}
 			logger.Info(
 				"Memory of %s has reached the limit. ",
 				container.Name)
-			prx := proxy.NewProxy(container.IP, 80,
+			prx := proxy.NewProxy(container.Ip, 80,
 				hostIP, config.HostPort, comment)
 			err = prx.EnableForwarding()
 			if err != nil {
@@ -100,18 +113,23 @@ func lookup(config *Config) {
 	}
 }
 
-func getHostIP() (hostIP string) {
-	hosts, err := net.InterfaceAddrs()
-	if err != nil {
-		logger.Fatal(err.Error())
-	}
-	return strings.Split(hosts[1].String(), "/")[0]
-}
-
 func mapProxies(proxies []proxy.Proxy) map[string]proxy.Proxy {
 	result := make(map[string]proxy.Proxy)
 	for _, prx := range proxies {
 		result[prx.Source.IP] = prx
 	}
 	return result
+}
+
+func checkLocalNetRoute() {
+	cmd := exec.Command("sysctl", "-n", "net.ipv4.conf.all.route_localnet")
+	cmd.Stdout = &bytes.Buffer{}
+	err := cmd.Run()
+	if err != nil {
+		logger.Fatal(err)
+	}
+	if strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n") != "1" {
+		logger.Fatal("Localnet routes disabled. You should enable it by" +
+			" 'sysctl -w net.ipv4.conf.all.route_localnet=1'")
+	}
 }

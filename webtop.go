@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"github.com/s-kostyaev/lxc"
+	"github.com/brnv/go-heaver"
+	"github.com/s-kostyaev/go-cgroup"
 	"html/template"
 	"io/ioutil"
 	"net"
@@ -85,15 +86,20 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	containerIP := fmt.Sprint(containerIPs[0])
-	containers, err := lxc.GetContainers()
+	containers, err := heaver.List("local")
 	if err != nil {
 		logger.Error(err.Error())
 	}
 	for _, container := range containers {
-		if container.IP == containerIP {
-			limit, err := lxc.GetParamInt("memory", container.Name, "limit")
+		if container.Ip == containerIP {
+			limit, err := cgroup.GetParamInt("memory/lxc/"+container.Name,
+				cgroup.MemoryLimit)
 			if err != nil {
-				logger.Error(err.Error())
+				limit, err = cgroup.GetParamInt("memory/lxc/"+container.Name+
+					"-1", cgroup.MemoryLimit)
+				if err != nil {
+					logger.Error(err.Error())
+				}
 			}
 			ct = ct.New(container.Name, limit)
 			break
