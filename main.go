@@ -3,45 +3,22 @@ package main
 import (
 	"bytes"
 	"github.com/brnv/go-heaver"
-	"github.com/op/go-logging"
-	"github.com/s-kostyaev/go-cgroup"
 	"github.com/s-kostyaev/go-iptables-proxy"
-	"os"
+	"github.com/s-kostyaev/go-lxc"
 	"os/exec"
 	"strings"
 	"time"
 )
 
-const (
-	configPath   = "/etc/webtop.toml"
-	comment      = "webtop"
-	templatePath = "top.htm"
-)
-
-var (
-	logfile   = os.Stderr
-	formatter = logging.MustStringFormatter(
-		"%{time:15:04:05.000000} %{pid} %{level:.8s} %{longfile} %{message}")
-	loglevel = logging.INFO
-	logger   = logging.MustGetLogger("webtop")
-)
-
-func initLog() {
-	logging.SetBackend(logging.NewLogBackend(logfile, "", 0))
-	logging.SetFormatter(formatter)
-	logging.SetLevel(loglevel, logger.Module)
-}
-
 func main() {
 	initLog()
-	config := GetConfig(configPath)
+	config := getConfig(configPath)
 	checkLocalNetRoute()
 	go Webserver(config)
 	lookup(config)
 }
 
 func lookup(config *Config) {
-	hostIP := "127.0.0.1"
 	for {
 		enabledProxies, err := proxy.GetEnabledProxies()
 		if err != nil {
@@ -56,39 +33,26 @@ func lookup(config *Config) {
 		for _, container := range containers {
 			if container.Status != "active" {
 				if prx, ok := mappedProxies[container.Ip]; ok {
-					err = prx.DisableForwarding()
-					if err != nil {
+					if err = prx.DisableForwarding(); err != nil {
 						logger.Error(err.Error())
 					}
-					logger.Info("%s: redirect disabled",
-						container.Name)
+					logger.Info("%s: redirect disabled", container.Name)
 				}
 				continue
 			}
-			limit, err := cgroup.GetParamInt("memory/lxc/"+container.Name,
-				cgroup.MemoryLimit)
+			limit, err := lxc.GetMemoryLimit(container.Name)
 			if err != nil {
-				limit, err = cgroup.GetParamInt("memory/lxc/"+container.Name+
-					"-1", cgroup.MemoryLimit)
-				if err != nil {
-					logger.Error(err.Error())
-					continue
-				}
+				logger.Error(err.Error())
+				continue
 			}
-			usage, err := cgroup.GetParamInt("memory/lxc/"+container.Name,
-				cgroup.MemoryUsage)
+			usage, err := lxc.GetMemoryUsage(container.Name)
 			if err != nil {
-				usage, err = cgroup.GetParamInt("memory/lxc/"+container.Name+
-					"-1", cgroup.MemoryUsage)
-				if err != nil {
-					logger.Error(err.Error())
-					continue
-				}
+				logger.Error(err.Error())
+				continue
 			}
 			if limit != usage {
 				if prx, ok := mappedProxies[container.Ip]; ok {
-					err = prx.DisableForwarding()
-					if err != nil {
+					if err = prx.DisableForwarding(); err != nil {
 						logger.Error(err.Error())
 					}
 					logger.Info("%s: redirect disabled", container.Name)
@@ -98,13 +62,10 @@ func lookup(config *Config) {
 			if _, ok := mappedProxies[container.Ip]; ok {
 				continue
 			}
-			logger.Info(
-				"Memory of %s has reached the limit. ",
-				container.Name)
-			prx := proxy.NewProxy(container.Ip, 80,
-				hostIP, config.HostPort, comment)
-			err = prx.EnableForwarding()
-			if err != nil {
+			logger.Info("Memory of %s has reached the limit. ", container.Name)
+			prx := proxy.NewProxy(container.Ip, 80, "127.0.0.1",
+				config.HostPort, comment)
+			if err = prx.EnableForwarding(); err != nil {
 				logger.Error(err.Error())
 			}
 
@@ -129,7 +90,10 @@ func checkLocalNetRoute() {
 		logger.Fatal(err)
 	}
 	if strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n") != "1" {
-		logger.Fatal("Localnet routes disabled. You should enable it by" +
+		logger.Fatal("Localnet routes disabled (RFC 4213: Packets received " +
+			"on an interface with a loopback destination address must be " +
+			"dropped). But this service should may enable redirect from " +
+			"container to host. You should enable localnet routes by" +
 			" 'sysctl -w net.ipv4.conf.all.route_localnet=1'")
 	}
 }

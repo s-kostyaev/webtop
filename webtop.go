@@ -1,16 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"github.com/brnv/go-heaver"
-	"github.com/s-kostyaev/go-cgroup"
+	"github.com/s-kostyaev/go-lxc"
+	"github.com/shirou/gopsutil"
 	"html/template"
-	"io/ioutil"
 	"net"
 	"net/http"
-	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -25,29 +23,10 @@ type duration struct {
 	time.Duration
 }
 
-func (d *duration) UnmarshalText(text []byte) error {
-	var err error
-	d.Duration, err = time.ParseDuration(string(text))
-	return err
-}
-
-func GetConfig(configPath string) *Config {
-	buf, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		logger.Fatal(err.Error())
-	}
-	config := Config{}
-	_, err = toml.Decode(string(buf), &config)
-	if err != nil {
-		logger.Fatal(err.Error())
-	}
-	return &config
-}
-
 type containerTop struct {
 	Name    string
 	LimitMb int
-	Procs   []proc
+	Procs   byMemory
 }
 
 type proc struct {
@@ -56,15 +35,16 @@ type proc struct {
 	Command string
 }
 
-func newProc(src []string) (proc proc) {
-	proc.Pid = src[0]
-	mem, err := strconv.Atoi(src[1])
-	if err != nil {
-		logger.Error(err.Error())
-	}
-	proc.Memory = fmt.Sprint(mem / 1024)
-	proc.Command = src[2]
-	return proc
+type byMemory []proc
+
+type myTemplate struct {
+	Template *template.Template
+}
+
+func (d *duration) UnmarshalText(text []byte) error {
+	var err error
+	d.Duration, err = time.ParseDuration(string(text))
+	return err
 }
 
 func (ct containerTop) New(name string, limit int) containerTop {
@@ -74,11 +54,7 @@ func (ct containerTop) New(name string, limit int) containerTop {
 	return ct
 }
 
-type myTemplate struct {
-	Template *template.Template
-}
-
-func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
+func (template myTemplate) handleTop(w http.ResponseWriter, r *http.Request) {
 	ct := containerTop{}
 	containerIPs, err := net.LookupIP(r.Host)
 	if err != nil {
@@ -92,14 +68,9 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, container := range containers {
 		if container.Ip == containerIP {
-			limit, err := cgroup.GetParamInt("memory/lxc/"+container.Name,
-				cgroup.MemoryLimit)
+			limit, err := lxc.GetMemoryLimit(container.Name)
 			if err != nil {
-				limit, err = cgroup.GetParamInt("memory/lxc/"+container.Name+
-					"-1", cgroup.MemoryLimit)
-				if err != nil {
-					logger.Error(err.Error())
-				}
+				logger.Error(err.Error())
 			}
 			ct = ct.New(container.Name, limit)
 			break
@@ -111,7 +82,15 @@ func (template myTemplate) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	url := strings.Split(strings.Trim(string(r.URL.Path), "/"), "/")
 	if url[0] == "kill" {
-		kill(url[1])
+		pid, err := strconv.Atoi(url[1])
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		process, err := gopsutil.NewProcess(int32(pid))
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		process.Kill()
 	}
 	err = template.Template.Execute(w, ct)
 	if err != nil {
@@ -126,39 +105,57 @@ func Webserver(config *Config) {
 	if err != nil {
 		logger.Panic(err)
 	}
-	http.HandleFunc("/", tem.handler)
+	http.HandleFunc("/", tem.handleTop)
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
 }
 
-func top(container string) []proc {
-	cmd := exec.Command("ps", "-o", "pid,rss,args,cgroup", "-k", "-rss", "-ax")
+func top(container string) byMemory {
+	res := byMemory{}
 
-	cmd.Stdout = &bytes.Buffer{}
-	err := cmd.Run()
-	if err != nil {
-		logger.Error(err.Error())
-	}
-
-	res := []proc{}
-
-	results := strings.Split(
-		strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n"), "\n")
-	for _, result := range results {
-		tmp := []string{}
-		buf := strings.Fields(result)
-		if strings.Contains(buf[len(buf)-1], container) {
-			tmp = buf[:2]
-			tmp = append(tmp, strings.Join(buf[2:len(buf)-1], " "))
-			res = append(res, newProc(tmp))
-		}
-	}
-	return res
-}
-
-func kill(pid string) {
-	cmd := exec.Command("kill", "-9", pid)
-	err := cmd.Run()
+	pids, err := lxc.GetPids(container)
 	if err != nil {
 		logger.Panic(err.Error())
 	}
+
+	for _, pid := range pids {
+		pr := proc{}
+		pr.Pid = fmt.Sprint(pid)
+		process, err := gopsutil.NewProcess(pid)
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		cmd, err := process.Cmdline()
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		pr.Command = cmd
+		mem, err := process.MemoryInfo()
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		pr.Memory = fmt.Sprint(mem.RSS / 1024 / 1024)
+		res = append(res, pr)
+	}
+	sort.Sort(sort.Reverse(res))
+	return res
+}
+
+func (a byMemory) Len() int {
+	return len(a)
+}
+
+func (a byMemory) Swap(i, j int) {
+	a[i], a[j] = a[j], a[i]
+}
+
+func (a byMemory) Less(i, j int) bool {
+	ai, err := strconv.Atoi(a[i].Memory)
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+	aj, err := strconv.Atoi(a[j].Memory)
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+	return ai < aj
 }
