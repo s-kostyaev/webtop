@@ -21,6 +21,11 @@ var (
 	logger   = logging.MustGetLogger("webtop")
 )
 
+type Config struct {
+	LookupTimeout duration
+	HostPort      int
+}
+
 func setupLogger() {
 	logging.SetBackend(logging.NewLogBackend(logfile, "", 0))
 	logging.SetFormatter(formatter)

@@ -14,11 +14,6 @@ import (
 	"time"
 )
 
-type Config struct {
-	LookupTimeout duration
-	HostPort      int
-}
-
 type duration struct {
 	time.Duration
 }
