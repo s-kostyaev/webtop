@@ -5,7 +5,6 @@ import (
 	"github.com/brnv/go-heaver"
 	"github.com/s-kostyaev/go-lxc"
 	"github.com/shirou/gopsutil"
-	"html/template"
 	"net"
 	"net/http"
 	"sort"
@@ -32,10 +31,6 @@ type proc struct {
 
 type byMemory []proc
 
-type myTemplate struct {
-	Template *template.Template
-}
-
 func (d *duration) UnmarshalText(text []byte) error {
 	var err error
 	d.Duration, err = time.ParseDuration(string(text))
@@ -49,58 +44,58 @@ func (ct containerTop) New(name string, limit int) containerTop {
 	return ct
 }
 
-func (template myTemplate) handleTop(w http.ResponseWriter, r *http.Request) {
-	ct := containerTop{}
-	containerIPs, err := net.LookupIP(r.Host)
-	if err != nil {
-		logger.Error(err.Error())
-		return
-	}
-	containerIP := fmt.Sprint(containerIPs[0])
+func getContainerTopByIp(ip string) containerTop {
+	result := containerTop{}
 	containers, err := heaver.List("local")
 	if err != nil {
 		logger.Error(err.Error())
 	}
 	for _, container := range containers {
-		if container.Ip == containerIP {
+		if container.Ip == ip {
 			limit, err := lxc.GetMemoryLimit(container.Name)
 			if err != nil {
 				logger.Error(err.Error())
 			}
-			ct = ct.New(container.Name, limit)
+			result = result.New(container.Name, limit)
 			break
 		}
 	}
-	if ct.Name == "" {
+	if result.Name == "" {
 		logger.Error("Cannot associate resolved IP to container")
+	}
+	return result
+}
+
+func handleTopPage(w http.ResponseWriter, r *http.Request) {
+	containerIPs, err := net.LookupIP(r.Host)
+	if err != nil {
+		logger.Error(err.Error())
 		return
 	}
-	url := strings.Split(strings.Trim(string(r.URL.Path), "/"), "/")
-	if url[0] == "kill" {
-		pid, err := strconv.Atoi(url[1])
-		if err != nil {
-			logger.Panic(err.Error())
-		}
-		process, err := gopsutil.NewProcess(int32(pid))
-		if err != nil {
-			logger.Panic(err.Error())
-		}
-		process.Kill()
-	}
-	err = template.Template.Execute(w, ct)
+	ct := getContainerTopByIp(fmt.Sprint(containerIPs[0]))
+	err = tem.Execute(w, ct)
 	if err != nil {
 		logger.Panic(err.Error())
 	}
 }
 
-func Webserver(config *Config) {
-	var tem myTemplate
-	var err error
-	tem.Template, err = template.ParseFiles(templatePath)
+func handleKill(w http.ResponseWriter, r *http.Request) {
+	url := strings.Split(strings.Trim(string(r.URL.Path), "/"), "/")
+	pid, err := strconv.Atoi(url[1])
 	if err != nil {
-		logger.Panic(err)
+		logger.Panic(err.Error())
 	}
-	http.HandleFunc("/", tem.handleTop)
+	process, err := gopsutil.NewProcess(int32(pid))
+	if err != nil {
+		logger.Error(err.Error())
+	}
+	process.Kill()
+
+}
+
+func Webserver(config *Config) {
+	http.HandleFunc("/", handleTopPage)
+	http.HandleFunc("/kill/", handleKill)
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
 }
 
