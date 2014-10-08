@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	initLog()
+	setupLogger()
 	config := getConfig(configPath)
 	checkLocalNetRoute()
 	go Webserver(config)

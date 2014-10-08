@@ -21,7 +21,7 @@ var (
 	logger   = logging.MustGetLogger("webtop")
 )
 
-func initLog() {
+func setupLogger() {
 	logging.SetBackend(logging.NewLogBackend(logfile, "", 0))
 	logging.SetFormatter(formatter)
 	logging.SetLevel(loglevel, logger.Module)
