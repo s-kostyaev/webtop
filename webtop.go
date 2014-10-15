@@ -18,9 +18,10 @@ type duration struct {
 }
 
 type containerTop struct {
-	Name    string
-	LimitMb int
-	Procs   byMemory
+	Name     string
+	LimitMb  int
+	TmpUsage int
+	Procs    byMemory
 }
 
 type proc struct {
@@ -40,6 +41,17 @@ func (d *duration) UnmarshalText(text []byte) error {
 func (ct containerTop) New(name string, limit int) containerTop {
 	ct.Name = name
 	ct.LimitMb = limit / 1024 / 1024
+	tmpfs, err := lxc.IsTmpTmpfs(name)
+	if err != nil {
+		logger.Error(err.Error())
+	}
+	if tmpfs {
+		tmpUsage, err := lxc.GetTmpUsageMb(name)
+		if err != nil {
+			logger.Error(err.Error())
+		}
+		ct.TmpUsage = tmpUsage
+	}
 	ct.Procs = top(name)
 	return ct
 }
@@ -93,9 +105,17 @@ func handleKill(w http.ResponseWriter, r *http.Request) {
 
 }
 
+func handleClearTmp(w http.ResponseWriter, r *http.Request) {
+	url := strings.Split(strings.Trim(string(r.URL.Path), "/"), "/")
+	if err := lxc.ClearTmp(url[1]); err != nil {
+		logger.Error(err.Error())
+	}
+}
+
 func Webserver(config *Config) {
 	http.HandleFunc("/", handleTopPage)
 	http.HandleFunc("/kill/", handleKill)
+	http.HandleFunc("/cleartmp/", handleClearTmp)
 	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
 }
 

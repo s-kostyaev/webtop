@@ -17,6 +17,12 @@
   Память {{.Name}}
  достигла порогового значения {{.LimitMb}} Mb. Для продолжения работы необходимо
  завершить один из процессов
+  {{if ne .TmpUsage 0}}
+    или очистить /tmp. 
+  <p>
+	/tmp использует {{.TmpUsage}} Mb памяти. <button onclick="httpGet('/cleartmp/{{.Name}}')">очистить</button>
+  </p>
+  {{end}}
 </h3>
 <table style="font-size: 1.2em;  font-family: Ubuntu" width="80%" 
        align="center" cellpadding="3" cellspacing="0">
