@@ -102,7 +102,7 @@ func Webserver(config *Config) {
 func top(container string) byMemory {
 	res := byMemory{}
 
-	pids, err := lxc.GetPids(container)
+	pids, err := lxc.GetMemoryPids(container)
 	if err != nil {
 		logger.Panic(err.Error())
 	}
