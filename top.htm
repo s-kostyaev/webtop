@@ -1,0 +1,66 @@
+<html><head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8">
+<style>
+  tbody tr:hover {
+  background: #FFEBCD; /* Цвет фона при наведении */
+  }
+  button {
+  border-radius: 5px 
+  }
+</style>
+</head>
+  <body>
+<h1 style="font-size: 2em; font-family: Ubuntu" align="center">
+  Память {{.Name}} исчерпана
+</h1>
+<h3 style="font-size: 1.2em; font-family: Ubuntu" align="center">
+  Память {{.Name}}
+ достигла порогового значения {{.LimitMb}} Mb. Для продолжения работы необходимо
+ завершить один из процессов
+  {{if ne .TmpUsage 0}}
+    или очистить /tmp. 
+  <p>
+	/tmp использует {{.TmpUsage}} Mb памяти. <button onclick="httpGet('/cleartmp/{{.Name}}')">очистить</button>
+  </p>
+  {{end}}
+</h3>
+<table style="font-size: 1.2em;  font-family: Ubuntu" width="80%" 
+       align="center" cellpadding="3" cellspacing="0">
+<thead>
+  <tr>
+    <td><b>PID</b></td>
+    <td><b>Используемая  память</b></td>
+    <td><b>Команда</b></td></tr>
+</thead>
+<tbody>
+  {{with .Procs}}
+     {{range .}}
+       {{if ne .Memory "0"}}
+        <tr>
+           <td>{{.Pid}}</td>
+		   <td>{{.Memory}} Mb</td>
+		   <td>{{.Command}}</td>
+	   {{if ne .Command "/sbin/init"}}
+	       <td><button onclick="httpGet('/kill/{{.Pid}}')">завершить</button></td>
+	   {{end}}
+	   </tr>
+	  {{end}}
+     {{end}}
+  {{end}}
+</tbody>
+</table>
+
+<script>
+function httpGet(theUrl)
+{
+    var xmlHttp = null;
+
+    xmlHttp = new XMLHttpRequest();
+    xmlHttp.open( "GET", theUrl, false );
+    xmlHttp.send( null );
+    window.location.reload();
+    return;
+}
+</script>
+
+</body></html>

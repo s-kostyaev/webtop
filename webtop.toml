@@ -1,0 +1,2 @@
+LookupTimeout = "3s"
+HostPort = 50000
