@@ -1,13 +1,12 @@
-# $Id: pkgbuild-mode.el,v 1.23 2007/10/20 16:02:14 juergen Exp $
-# Maintainer:  <s-kostyaev@localhost>
+# Maintainer:  <s-kostyaev@ngs>
 pkgname=webtop-git
-pkgver=0.1
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="web-based top for cgroup"
 arch=('i686' 'x86_64')
 url="https://github.com/s-kostyaev/webtop"
 license=('unknown')
-depends=()
+depends=('git')
 makedepends=('go')
 backup=('etc/webtop.toml')
 branch='dev'
