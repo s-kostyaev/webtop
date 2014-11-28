@@ -11,7 +11,7 @@ import (
 const (
 	configPath   = "/etc/webtop.toml"
 	comment      = "webtop"
-	templatePath = "top.htm"
+	templatePath = "/usr/share/webtop/top.htm"
 )
 
 var (
