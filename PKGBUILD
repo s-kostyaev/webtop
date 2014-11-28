@@ -9,7 +9,7 @@ license=('unknown')
 depends=('git')
 makedepends=('go')
 backup=('etc/webtop.toml')
-branch='dev'
+branch='master'
 source=("${pkgname}::git+https://github.com/s-kostyaev/webtop#branch=${branch}")
 md5sums=('SKIP')
 build(){
