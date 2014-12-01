@@ -1,6 +1,6 @@
 # Maintainer:  <s-kostyaev@ngs>
 pkgname=webtop-git
-pkgver=0.1.2
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="web-based top for cgroup"
 arch=('i686' 'x86_64')
@@ -12,6 +12,7 @@ backup=('etc/webtop.toml')
 branch='master'
 source=("${pkgname}::git+https://github.com/s-kostyaev/webtop#branch=${branch}")
 md5sums=('SKIP')
+install=webtop.install
 build(){
       go get github.com/BurntSushi/toml
 	  go get github.com/op/go-logging
@@ -26,5 +27,7 @@ package(){
   install -D -m 755 ${srcdir}/${pkgname}/webtop ${pkgdir}/usr/bin/webtop
   install -D -m 644 ${srcdir}/${pkgname}/webtop.toml ${pkgdir}/etc/webtop.toml
   install -D -m 644 ${srcdir}/${pkgname}/top.htm ${pkgdir}/usr/share/webtop/top.htm
+  install -D -m 644 ${srcdir}/${pkgname}/webtop.service ${pkgdir}/usr/lib/systemd/system/webtop.service
+  install -D -m 644 ${srcdir}/${pkgname}/12-localnet-route.conf ${pkgdir}/etc/sysctl.d/12-localnet-route.conf
 }
 
