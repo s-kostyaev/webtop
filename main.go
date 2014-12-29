@@ -1,24 +1,22 @@
 package main
 
 import (
-	"bytes"
 	"github.com/brnv/go-heaver"
 	"github.com/s-kostyaev/go-iptables-proxy"
 	"github.com/s-kostyaev/go-lxc"
-	"os/exec"
-	"strings"
+	"net"
 	"time"
 )
 
 func main() {
 	setupLogger()
 	config := getConfig(configPath)
-	checkLocalNetRoute()
 	go Webserver(config)
 	lookup(config)
 }
 
 func lookup(config *Config) {
+	hostIp := mustGetHostIp()
 	for {
 		enabledProxies, err := proxy.GetEnabledProxies()
 		if err != nil {
@@ -63,7 +61,7 @@ func lookup(config *Config) {
 				continue
 			}
 			logger.Info("Memory of %s has reached the limit. ", container.Name)
-			prx := proxy.NewProxy(container.Ip, 80, "127.0.0.1",
+			prx := proxy.NewProxy(container.Ip, 80, hostIp,
 				config.HostPort, comment)
 			if err = prx.EnableForwarding(); err != nil {
 				logger.Error(err.Error())
@@ -82,18 +80,26 @@ func mapProxies(proxies []proxy.Proxy) map[string]proxy.Proxy {
 	return result
 }
 
-func checkLocalNetRoute() {
-	cmd := exec.Command("sysctl", "-n", "net.ipv4.conf.all.route_localnet")
-	cmd.Stdout = &bytes.Buffer{}
-	err := cmd.Run()
+// return host ip address string
+// or terminate program
+func mustGetHostIp() string {
+
+	addrs, err := net.InterfaceAddrs()
+
 	if err != nil {
-		logger.Fatal(err)
+		logger.Fatal(err.Error())
 	}
-	if strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n") != "1" {
-		logger.Fatal("Localnet routes disabled (RFC 4213: Packets received " +
-			"on an interface with a loopback destination address must be " +
-			"dropped). But this service should may enable redirect from " +
-			"container to host. You should enable localnet routes by" +
-			" 'sysctl -w net.ipv4.conf.all.route_localnet=1'")
+
+	for _, address := range addrs {
+
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+
+		}
 	}
+
+	logger.Fatal("Could not get host ip address")
+	return ""
 }
