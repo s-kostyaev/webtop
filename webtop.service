@@ -1,0 +1,11 @@
+[Unit]
+Description=web-based top for lxc containers
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/webtop
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
