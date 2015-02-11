@@ -1,6 +1,6 @@
 # Maintainer:  <s-kostyaev@ngs>
 pkgname=webtop-git
-pkgver=0.3.1
+pkgver=0.4.1
 pkgrel=1
 pkgdesc="web-based top for cgroup"
 arch=('i686' 'x86_64')
@@ -29,5 +29,6 @@ package(){
   install -D -m 644 ${srcdir}/${pkgname}/top.htm ${pkgdir}/usr/share/webtop/top.htm
   install -D -m 644 ${srcdir}/${pkgname}/webtop.service ${pkgdir}/usr/lib/systemd/system/webtop.service
   install -D -m 644 ${srcdir}/${pkgname}/12-ip-forward.conf ${pkgdir}/etc/sysctl.d/12-ip-forward.conf
+  install -D -m 644 ${srcdir}/${pkgname}/12-localnet-route.conf ${pkgdir}/etc/sysctl.d/12-localnet-route.conf
 }
 
