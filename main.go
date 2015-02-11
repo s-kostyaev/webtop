@@ -20,7 +20,7 @@ type freezedContainer struct {
 	StopWebserver chan bool
 }
 
-var freezedContainers map[string]freezedContainer
+var freezedContainers = make(map[string]freezedContainer)
 
 func main() {
 	setupLogger()
