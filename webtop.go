@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/brnv/go-heaver"
+	"github.com/hydrogen18/stoppableListener"
 	"github.com/s-kostyaev/go-lxc"
 	"github.com/shirou/gopsutil"
 	"net"
@@ -112,11 +113,33 @@ func handleClearTmp(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func Webserver(config *Config) {
+func startWebserver(ip string, port int) (stop chan bool) {
 	http.HandleFunc("/", handleTopPage)
 	http.HandleFunc("/kill/", handleKill)
 	http.HandleFunc("/cleartmp/", handleClearTmp)
-	http.ListenAndServe(fmt.Sprintf(":%d", config.HostPort), nil)
+
+	originalListener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", ip, port))
+	if err != nil {
+		logger.Error(err.Error())
+	}
+
+	sListener, err := stoppableListener.New(originalListener)
+	if err != nil {
+		logger.Error(err.Error())
+	}
+	server := http.Server{}
+
+	go func() {
+		logger.Info("Starting webserver for %s", ip)
+		server.Serve(sListener)
+		select {
+		case <-stop:
+			sListener.Stop()
+		}
+		logger.Info("Webserver for %s has stopped", ip)
+	}()
+
+	return stop
 }
 
 func top(container string) byMemory {

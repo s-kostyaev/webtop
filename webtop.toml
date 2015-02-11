@@ -1,2 +1,2 @@
 LookupTimeout = "3s"
-HostPort = 50000
+VirtualIpSubnet = "127.127.0.1/16"

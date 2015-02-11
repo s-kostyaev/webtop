@@ -12,6 +12,7 @@ const (
 	configPath   = "/etc/webtop.toml"
 	comment      = "webtop"
 	templatePath = "/usr/share/webtop/top.htm"
+	bridgeName   = "webtop_bridge"
 )
 
 var (
@@ -24,8 +25,8 @@ var (
 )
 
 type Config struct {
-	LookupTimeout duration
-	HostPort      int
+	LookupTimeout   duration
+	VirtualIpSubnet string
 }
 
 func setupLogger() {
