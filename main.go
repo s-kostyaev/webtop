@@ -1,37 +1,29 @@
 package main
 
 import (
-	"bytes"
+	"encoding/json"
 	"fmt"
 	"github.com/brnv/go-heaver"
-	"github.com/s-kostyaev/go-iptables-proxy"
-	"github.com/s-kostyaev/go-linux-net-bridge"
 	"github.com/s-kostyaev/go-lxc"
+	"github.com/s-kostyaev/webtop-protocol"
+	"github.com/shirou/gopsutil"
 	"net"
+	"os"
 	"os/exec"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
-type freezedContainer struct {
-	*lxc.Container
-	Proxy         *proxy.Proxy
-	VirtualIp     string
-	StopWebserver chan bool
-}
-
-var freezedContainers = make(map[string]freezedContainer)
+var sharedConnection net.Conn
+var webtopContainerName string
 
 func main() {
 	setupLogger()
 	config := getConfig(configPath)
-	checkLocalNetRoute()
-	hostIp := mustGetHostIp()
-	err := prepareVirtualNet(config.VirtualIpSubnet, hostIp)
-	if err != nil {
-		logger.Error(err.Error())
-	}
-	garbageClear()
+	prepareEnvironment()
+	go commandManager()
 	lookup(config)
 }
 
@@ -41,11 +33,11 @@ func lookup(config *Config) {
 		if err != nil {
 			logger.Error(err.Error())
 		}
+		freezedIps := getAssignedIps(webtopContainerName)
 		for _, container := range containers {
 			if container.Status != "active" {
-				currentContainer, ok := freezedContainers[container.Name]
-				if ok {
-					currentContainer.Unfreeze()
+				if _, ok := freezedIps[container.Ip]; ok {
+					containerUnfreeze(container)
 				}
 				continue
 			}
@@ -60,159 +52,260 @@ func lookup(config *Config) {
 				continue
 			}
 			if limit != usage {
-				currentContainer, ok := freezedContainers[container.Name]
-				if ok {
-					currentContainer.Unfreeze()
+				if _, ok := freezedIps[container.Ip]; ok {
+					containerUnfreeze(container)
 				}
 				continue
 			}
-			if _, ok := freezedContainers[container.Name]; ok {
+			if _, ok := freezedIps[container.Ip]; ok {
 				continue
 			}
 			logger.Info("Memory of %s has reached the limit. ", container.Name)
-			containerIsFreezed(&container, config)
+			containerIsFreezed(container)
 
 		}
 		time.Sleep(config.LookupTimeout.Duration)
 	}
 }
 
-// return host ip address string
-// or terminate program
-func mustGetHostIp() string {
-
-	addrs, err := net.InterfaceAddrs()
-
+func containerUnfreeze(container lxc.Container) {
+	err := deleteIp(container.Ip, webtopContainerName)
 	if err != nil {
-		logger.Fatal(err.Error())
+		logger.Error(err.Error())
+		return
 	}
-
-	for _, address := range addrs {
-
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-
-		}
-	}
-
-	logger.Fatal("Could not get host ip address")
-	return ""
-}
-
-func checkLocalNetRoute() {
-	cmd := exec.Command("sysctl", "-n", "net.ipv4.conf.all.route_localnet")
-	cmd.Stdout = &bytes.Buffer{}
-	err := cmd.Run()
-	if err != nil {
-		logger.Fatal(err.Error())
-	}
-	if strings.Trim(cmd.Stdout.(*bytes.Buffer).String(), "\n") != "1" {
-		logger.Fatal("Localnet routes disabled (RFC 4213: Packets received " +
-			"on an interface with a loopback destination address must be " +
-			"dropped). But this service should may enable redirect from " +
-			"container to host. You should enable localnet routes by" +
-			" 'sysctl -w net.ipv4.conf.all.route_localnet=1'")
-	}
-
-}
-
-func prepareVirtualNet(virtualSubnet, hostIp string) error {
-
-	if !bridge.IsBridgeExist(bridgeName) {
-		err := bridge.CreateBridge(bridgeName)
-		if err != nil {
-			return err
-		}
-	}
-
-	err := bridge.StartBridge(bridgeName)
-	if err != nil {
-		return err
-	}
-
-	return setVirtualSubnetRoutes(virtualSubnet, hostIp)
-}
-
-func setVirtualSubnetRoutes(virtualSubnet, hostIp string) error {
-	cmd := exec.Command("ip", "route", "add", virtualSubnet, "via", hostIp)
-	return cmd.Run()
-}
-
-func containerToVirtualIp(containerIp, virtualSubnet string) (string, error) {
-	tmp := strings.Split(virtualSubnet, "/")
-	netMask := tmp[1]
-	splittedVirtualIp := strings.Split(tmp[0], ".")
-	splittedContainerIp := strings.Split(containerIp, ".")
-	resultIp := ""
-	switch netMask {
-	case "24":
-		resultIp = fmt.Sprintf("%s.%s.%s.%s",
-			splittedVirtualIp[0], splittedVirtualIp[1],
-			splittedVirtualIp[2], splittedContainerIp[3])
-	case "16":
-		resultIp = fmt.Sprintf("%s.%s.%s.%s",
-			splittedVirtualIp[0], splittedVirtualIp[1],
-			splittedContainerIp[2], splittedContainerIp[3])
-	case "8":
-		resultIp = fmt.Sprintf("%s.%s.%s.%s",
-			splittedVirtualIp[0], splittedContainerIp[1],
-			splittedContainerIp[2], splittedContainerIp[3])
-	default:
-		return "", fmt.Errorf("Bad netmask in config file. Only /8, /16 and " +
-			"/24 netmasks are accepted.")
-	}
-	return resultIp, nil
-}
-
-func newFreezedContainer(container *lxc.Container, virtualSubnet string,
-) freezedContainer {
-	result := freezedContainer{}
-	result.Container = container
-	virtualIp, err := containerToVirtualIp(container.Ip, virtualSubnet)
+	err = assignIp(container.Ip, container.Name)
 	if err != nil {
 		logger.Error(err.Error())
 	}
-	result.VirtualIp = virtualIp
-	result.Proxy = proxy.NewProxy(container.Ip, 80, virtualIp, 80, comment,
-		true)
+}
+
+func containerIsFreezed(container lxc.Container) {
+	err := deleteIp(container.Ip, container.Name)
+	if err != nil {
+		logger.Error(err.Error())
+		return
+	}
+	err = assignIp(container.Ip, webtopContainerName)
+	if err != nil {
+		logger.Error(err.Error())
+	}
+}
+
+func prepareEnvironment() {
+	hostname, err := os.Hostname()
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+	webtopContainerName = "webtop-" + hostname
+
+	containerList, err := heaver.List(hostname)
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+
+	// if container not found
+	if _, ok := containerList[webtopContainerName]; !ok {
+		// create container
+		imageName := []string{"abox"}
+		_, err = heaver.Create(webtopContainerName, imageName)
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		// TODO: install webserver
+
+		// TODO: enable and start webserver unit
+
+	}
+	rootfs, err := lxc.GetRootFS(webtopContainerName)
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+	socketPath := rootfs + "/tmp/webtop.sock"
+	go listenSocket(socketPath)
+}
+
+func listenSocket(path string) {
+	// remove socket file if exist
+	os.Remove(path)
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		logger.Error("Listen error: %s\n", err.Error())
+		go listenSocket(path)
+		return
+	}
+	connection, err := listener.Accept()
+	if err != nil {
+		logger.Error("Access error: %s\n", err.Error())
+		go listenSocket(path)
+		return
+	}
+	sharedConnection = connection
+}
+
+func commandManager() {
+	decoder := json.NewDecoder(sharedConnection)
+	for {
+		request := protocol.Request{}
+		err := decoder.Decode(&request)
+		if err != nil {
+			logger.Error(err.Error())
+			go commandManager()
+			return
+		}
+		go processRequest(request)
+	}
+}
+
+func processRequest(request protocol.Request) {
+	answer := protocol.Answer{}
+	answer.Id = request.Id
+	answer.Status = "ok"
+	cmd := strings.Split(request.Cmd, "/")
+	switch cmd[0] {
+	case "top":
+		processTop(&answer, request.Host)
+	case "cleartmp":
+		if err := lxc.ClearTmp(cmd[1]); err != nil {
+			logger.Error(err.Error())
+			answer.Status = "Error"
+			answer.Error = err.Error()
+		} else {
+			processTop(&answer, request.Host)
+		}
+	case "kill":
+		pid, _ := strconv.Atoi(cmd[1])
+		process, err := gopsutil.NewProcess(int32(pid))
+		if err != nil {
+			logger.Error(err.Error())
+			answer.Status = "Error"
+			answer.Error = err.Error()
+		} else {
+			process.Kill()
+			processTop(&answer, request.Host)
+		}
+	default:
+		answer.Status = "Error"
+		answer.Error = fmt.Sprintf("Command %s does not implemented", cmd[0])
+	}
+	encoder := json.NewEncoder(sharedConnection)
+	err := encoder.Encode(answer)
+	for err != nil {
+		logger.Error(err.Error())
+		err = encoder.Encode(answer)
+	}
+}
+
+func processTop(answer *protocol.Answer, host string) {
+	containerIPs, err := net.LookupIP(host)
+	if err != nil {
+		logger.Error(err.Error())
+		answer.Status = "Error"
+		answer.Error = err.Error()
+		return
+	}
+	answer.Data = getContainerTopByIp(fmt.Sprint(containerIPs[0]))
+}
+
+func deleteIp(ip, containerName string) error {
+	cmd := exec.Command("lxc-attach", "-n", containerName, "-e", "--", "/bin/ip",
+		"addr", "del", ip, "dev", "eth0")
+	return cmd.Run()
+}
+
+func assignIp(ip, containerName string) error {
+	cmd := exec.Command("lxc-attach", "-n", containerName, "-e", "--", "/bin/ip",
+		"addr", "add", ip, "dev", "eth0")
+	return cmd.Run()
+}
+
+func getAssignedIps(containerName string) map[string]struct{} {
+	result := make(map[string]struct{})
+	cmd := exec.Command("lxc-attach", "-n", containerName, "-e", "--", "/bin/ip",
+		"-4", "-o", "addr")
+	out, err := cmd.Output()
+	if err != nil {
+		logger.Error(err.Error())
+	}
+	splittedOut := strings.Split(string(out), "\n")
+	for _, ipString := range splittedOut {
+		tmp := strings.Fields(ipString)
+		if tmp[1] != "lo" {
+			result[tmp[3]] = struct{}{}
+		}
+	}
 
 	return result
 }
 
-func (container *freezedContainer) Unfreeze() {
-	container.StopWebserver <- true
-	container.Proxy.DisableForwarding()
-	bridge.RemoveIpFromBridge(container.VirtualIp, bridgeName)
-
-	delete(freezedContainers, container.Name)
-}
-
-func containerIsFreezed(container *lxc.Container, config *Config) {
-	if _, ok := freezedContainers[container.Name]; ok {
-		return
-	}
-
-	newContainer := newFreezedContainer(container, config.VirtualIpSubnet)
-	bridge.AssignIpToBridge(newContainer.VirtualIp, bridgeName)
-	err := newContainer.Proxy.EnableForwarding()
+func NewContainerTop(name string, limit int) protocol.ContainerTop {
+	ct := protocol.ContainerTop{}
+	ct.Name = name
+	ct.LimitMb = limit / 1024 / 1024
+	tmpfs, err := lxc.IsTmpTmpfs(name)
 	if err != nil {
 		logger.Error(err.Error())
 	}
-	newContainer.StopWebserver = startWebserver(newContainer.VirtualIp, 80)
-
-	freezedContainers[container.Name] = newContainer
+	if tmpfs {
+		tmpUsage, err := lxc.GetTmpUsageMb(name)
+		if err != nil {
+			logger.Error(err.Error())
+		}
+		ct.TmpUsage = tmpUsage
+	}
+	ct.Procs = top(name)
+	return ct
 }
 
-func garbageClear() {
-	enabledProxies, err := proxy.GetEnabledProxies()
+func getContainerTopByIp(ip string) protocol.ContainerTop {
+	result := protocol.ContainerTop{}
+	containers, err := heaver.List("local")
 	if err != nil {
 		logger.Error(err.Error())
 	}
-	enabledProxies = proxy.FilterByComment(enabledProxies, comment)
-	for _, currentProxy := range enabledProxies {
-		bridge.RemoveIpFromBridge(currentProxy.Dest.IP, bridgeName)
-		currentProxy.DisableForwarding()
+	for _, container := range containers {
+		if container.Ip == ip {
+			limit, err := lxc.GetMemoryLimit(container.Name)
+			if err != nil {
+				logger.Error(err.Error())
+			}
+			result = NewContainerTop(container.Name, limit)
+			break
+		}
 	}
+	if result.Name == "" {
+		logger.Error("Cannot associate resolved IP to container")
+	}
+	return result
+}
+
+func top(container string) protocol.ByMemory {
+	res := protocol.ByMemory{}
+
+	pids, err := lxc.GetMemoryPids(container)
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+
+	for _, pid := range pids {
+		pr := protocol.Proc{}
+		pr.Pid = fmt.Sprint(pid)
+		process, err := gopsutil.NewProcess(pid)
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		cmd, err := process.Cmdline()
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		pr.Command = cmd
+		mem, err := process.MemoryInfo()
+		if err != nil {
+			logger.Panic(err.Error())
+		}
+		pr.Memory = fmt.Sprint(mem.RSS / 1024 / 1024)
+		res = append(res, pr)
+	}
+	sort.Sort(sort.Reverse(res))
+	return res
 }
