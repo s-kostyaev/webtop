@@ -17,8 +17,8 @@ build(){
       go get github.com/BurntSushi/toml
 	  go get github.com/op/go-logging
 	  go get github.com/brnv/go-heaver
-	  go get github.com/s-kostyaev/go-iptables-proxy
 	  go get github.com/s-kostyaev/go-lxc
+      go get github.com/s-kostyaev/webtop-protocol
 	  go get github.com/shirou/gopsutil
 	  cd ${srcdir}/${pkgname}
 	  go build -o webtop
@@ -26,9 +26,6 @@ build(){
 package(){
   install -D -m 755 ${srcdir}/${pkgname}/webtop ${pkgdir}/usr/bin/webtop
   install -D -m 644 ${srcdir}/${pkgname}/webtop.toml ${pkgdir}/etc/webtop.toml
-  install -D -m 644 ${srcdir}/${pkgname}/top.htm ${pkgdir}/usr/share/webtop/top.htm
   install -D -m 644 ${srcdir}/${pkgname}/webtop.service ${pkgdir}/usr/lib/systemd/system/webtop.service
-  install -D -m 644 ${srcdir}/${pkgname}/12-ip-forward.conf ${pkgdir}/etc/sysctl.d/12-ip-forward.conf
-  install -D -m 644 ${srcdir}/${pkgname}/12-localnet-route.conf ${pkgdir}/etc/sysctl.d/12-localnet-route.conf
 }
 
