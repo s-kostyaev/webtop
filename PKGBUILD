@@ -1,6 +1,6 @@
 # Maintainer:  <s-kostyaev@ngs>
 pkgname=webtop-git
-pkgver=0.4.1
+pkgver=0.5.0
 pkgrel=1
 pkgdesc="web-based top for cgroup"
 arch=('i686' 'x86_64')
@@ -12,16 +12,11 @@ backup=('etc/webtop.toml')
 branch='dev'
 source=("${pkgname}::git+https://github.com/s-kostyaev/webtop#branch=${branch}")
 md5sums=('SKIP')
-install=webtop.install
 build(){
-      go get github.com/BurntSushi/toml
-	  go get github.com/op/go-logging
-	  go get github.com/brnv/go-heaver
-	  go get github.com/s-kostyaev/go-lxc
-      go get github.com/s-kostyaev/webtop-protocol
-	  go get github.com/shirou/gopsutil
-	  cd ${srcdir}/${pkgname}
-	  go build -o webtop
+  cd ${srcdir}/${pkgname}
+  deps=`go list -f '{{join .Deps "\n"}}' |  xargs go list -f '{{if not .Standard}}{{.ImportPath}}{{end}}'`
+  for dep in $deps; do go get $dep; done
+  go build -o webtop
 }
 package(){
   install -D -m 755 ${srcdir}/${pkgname}/webtop ${pkgdir}/usr/bin/webtop
