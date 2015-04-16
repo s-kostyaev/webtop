@@ -121,7 +121,7 @@ func prepareEnvironment() {
 	if err != nil {
 		logger.Panic(err.Error())
 	}
-	socketPath := rootfs + "/tmp/webtop.sock"
+	socketPath := rootfs + "/webtop.sock"
 	go listenSocket(socketPath)
 }
 
