@@ -6,18 +6,19 @@ import (
 	"github.com/brnv/go-heaver"
 	"github.com/s-kostyaev/go-lxc"
 	"github.com/s-kostyaev/webtop-protocol"
-	"github.com/shirou/gopsutil"
+	"github.com/shirou/gopsutil/process"
 	"net"
 	"os"
 	"os/exec"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-var sharedConnection net.Conn
-var webtopContainerName string
+var webtopContainer string
+var webtopContainerRootFs string
 
 func main() {
 	setupLogger()
@@ -29,38 +30,51 @@ func main() {
 
 func lookup(config *Config) {
 	for {
-		containers, err := heaver.List("local")
+		containers, err := lxc.GetContainers()
 		if err != nil {
 			logger.Error(err.Error())
+			continue
 		}
-		freezedIps := getAssignedIps(webtopContainerName)
+		freezedIps := getAssignedIps(webtopContainer)
 		for _, container := range containers {
-			if container.Status != "active" {
-				if _, ok := freezedIps[container.Ip]; ok {
-					containerUnfreeze(container)
-				}
+			if container == webtopContainer {
 				continue
 			}
-			limit, err := lxc.GetMemoryLimit(container.Name)
+			containerIp, err := lxc.GetConfigItem(container, "lxc.network.ipv4")
 			if err != nil {
 				logger.Error(err.Error())
 				continue
 			}
-			usage, err := lxc.GetMemoryUsage(container.Name)
+			state, err := lxc.GetState(container)
+			if state != "RUNNING" {
+				if _, ok := freezedIps[containerIp]; ok {
+					logger.Info("Container %s is %s", container,
+						strings.ToLower(state))
+					deleteIp(containerIp, webtopContainer)
+				}
+				continue
+			}
+			limit, err := lxc.GetMemoryLimit(container)
+			if err != nil {
+				logger.Error(err.Error())
+				continue
+			}
+			usage, err := lxc.GetMemoryUsage(container)
 			if err != nil {
 				logger.Error(err.Error())
 				continue
 			}
 			if limit != usage {
-				if _, ok := freezedIps[container.Ip]; ok {
+				if _, ok := freezedIps[containerIp]; ok {
+					logger.Info("Memory of %s is now free", container)
 					containerUnfreeze(container)
 				}
 				continue
 			}
-			if _, ok := freezedIps[container.Ip]; ok {
+			if _, ok := freezedIps[containerIp]; ok {
 				continue
 			}
-			logger.Info("Memory of %s has reached the limit. ", container.Name)
+			logger.Info("Memory of %s has reached the limit. ", container)
 			containerIsFreezed(container)
 
 		}
@@ -68,27 +82,50 @@ func lookup(config *Config) {
 	}
 }
 
-func containerUnfreeze(container lxc.Container) {
-	err := deleteIp(container.Ip, webtopContainerName)
+func containerUnfreeze(container string) {
+	logger.Info("Unfreezing %s", container)
+	containerIp, err := lxc.GetConfigItem(container, "lxc.network.ipv4")
 	if err != nil {
 		logger.Error(err.Error())
 		return
 	}
-	err = assignIp(container.Ip, container.Name)
+	containerGw, err := lxc.GetConfigItem(container, "lxc.network.ipv4.gateway")
 	if err != nil {
 		logger.Error(err.Error())
+		return
+	}
+	err = deleteIp(containerIp, webtopContainer)
+	for err != nil {
+		logger.Error(err.Error())
+		err = deleteIp(containerIp, webtopContainer)
+	}
+	err = assignIp(containerIp, container)
+	for err != nil {
+		logger.Error(err.Error())
+		err = assignIp(containerIp, container)
+	}
+	setDefaultGateway(container, containerGw)
+	for err != nil {
+		logger.Error(err.Error())
+		err = setDefaultGateway(container, containerGw)
 	}
 }
 
-func containerIsFreezed(container lxc.Container) {
-	err := deleteIp(container.Ip, container.Name)
+func containerIsFreezed(container string) {
+	containerIp, err := lxc.GetConfigItem(container, "lxc.network.ipv4")
 	if err != nil {
 		logger.Error(err.Error())
 		return
 	}
-	err = assignIp(container.Ip, webtopContainerName)
-	if err != nil {
+	err = deleteIp(containerIp, container)
+	for err != nil {
 		logger.Error(err.Error())
+		err = deleteIp(containerIp, container)
+	}
+	err = assignIp(containerIp, webtopContainer)
+	for err != nil {
+		logger.Error(err.Error())
+		err = assignIp(containerIp, webtopContainer)
 	}
 }
 
@@ -97,7 +134,7 @@ func prepareEnvironment() {
 	if err != nil {
 		logger.Panic(err.Error())
 	}
-	webtopContainerName = "webtop-" + hostname
+	webtopContainer = "webtop-" + hostname
 
 	containerList, err := heaver.List(hostname)
 	if err != nil {
@@ -105,10 +142,10 @@ func prepareEnvironment() {
 	}
 
 	// if container not found
-	if _, ok := containerList[webtopContainerName]; !ok {
+	if _, ok := containerList[webtopContainer]; !ok {
 		// create container
 		imageName := []string{"abox"}
-		_, err = heaver.Create(webtopContainerName, imageName)
+		_, err = heaver.Create(webtopContainer, imageName)
 		if err != nil {
 			logger.Panic(err.Error())
 		}
@@ -117,41 +154,41 @@ func prepareEnvironment() {
 		// TODO: enable and start webserver unit
 
 	}
-	rootfs, err := lxc.GetRootFS(webtopContainerName)
+	webtopContainerRootFs, err = lxc.GetRootFS(webtopContainer)
 	if err != nil {
 		logger.Panic(err.Error())
 	}
-	socketPath := rootfs + "/webtop.sock"
-	go listenSocket(socketPath)
 }
 
-func listenSocket(path string) {
+func commandManager() {
+	commandSocketPath := webtopContainerRootFs + "/webtop-command.sock"
 	// remove socket file if exist
-	os.Remove(path)
-	listener, err := net.Listen("unix", path)
+	os.Remove(commandSocketPath)
+	listener, err := net.Listen("unix", commandSocketPath)
 	if err != nil {
 		logger.Error("Listen error: %s\n", err.Error())
-		go listenSocket(path)
+		go commandManager()
 		return
 	}
 	connection, err := listener.Accept()
 	if err != nil {
 		logger.Error("Access error: %s\n", err.Error())
-		go listenSocket(path)
+		go commandManager()
 		return
 	}
-	sharedConnection = connection
-}
-
-func commandManager() {
-	decoder := json.NewDecoder(sharedConnection)
+	decoder := json.NewDecoder(connection)
 	for {
 		request := protocol.Request{}
 		err := decoder.Decode(&request)
 		if err != nil {
-			logger.Error(err.Error())
+			if err.Error() != "EOF" {
+				logger.Error(err.Error())
+			}
 			go commandManager()
 			return
+		}
+		if reflect.DeepEqual(request, protocol.Request{}) {
+			continue
 		}
 		go processRequest(request)
 	}
@@ -175,7 +212,7 @@ func processRequest(request protocol.Request) {
 		}
 	case "kill":
 		pid, _ := strconv.Atoi(cmd[1])
-		process, err := gopsutil.NewProcess(int32(pid))
+		process, err := process.NewProcess(int32(pid))
 		if err != nil {
 			logger.Error(err.Error())
 			answer.Status = "Error"
@@ -188,8 +225,16 @@ func processRequest(request protocol.Request) {
 		answer.Status = "Error"
 		answer.Error = fmt.Sprintf("Command %s does not implemented", cmd[0])
 	}
-	encoder := json.NewEncoder(sharedConnection)
-	err := encoder.Encode(answer)
+	dataSocketPath := webtopContainerRootFs + "/webtop-data.sock"
+	connection, err := net.Dial("unix", dataSocketPath)
+	if err != nil {
+		logger.Error(err.Error())
+		return
+	}
+	defer connection.Close()
+
+	encoder := json.NewEncoder(connection)
+	err = encoder.Encode(answer)
 	for err != nil {
 		logger.Error(err.Error())
 		err = encoder.Encode(answer)
@@ -207,15 +252,22 @@ func processTop(answer *protocol.Answer, host string) {
 	answer.Data = getContainerTopByIp(fmt.Sprint(containerIPs[0]))
 }
 
-func deleteIp(ip, containerName string) error {
-	cmd := exec.Command("lxc-attach", "-n", containerName, "-e", "--", "/bin/ip",
+func deleteIp(ip, container string) error {
+	cmd := exec.Command("lxc-attach", "-n", container, "-e", "--", "/bin/ip",
 		"addr", "del", ip, "dev", "eth0")
 	return cmd.Run()
 }
 
-func assignIp(ip, containerName string) error {
-	cmd := exec.Command("lxc-attach", "-n", containerName, "-e", "--", "/bin/ip",
+func assignIp(ip, container string) error {
+	logger.Debug("%s assigning to %s", ip, container)
+	cmd := exec.Command("lxc-attach", "-n", container, "-e", "--", "/bin/ip",
 		"addr", "add", ip, "dev", "eth0")
+	return cmd.Run()
+}
+
+func setDefaultGateway(container, gateway string) error {
+	cmd := exec.Command("lxc-attach", "-e", "-n", container, "--",
+		"/sbin/route", "add", "default", "gw", gateway, "dev", "eth0")
 	return cmd.Run()
 }
 
@@ -230,8 +282,10 @@ func getAssignedIps(containerName string) map[string]struct{} {
 	splittedOut := strings.Split(string(out), "\n")
 	for _, ipString := range splittedOut {
 		tmp := strings.Fields(ipString)
-		if tmp[1] != "lo" {
-			result[tmp[3]] = struct{}{}
+		if len(tmp) > 0 {
+			if tmp[1] != "lo" {
+				result[tmp[3]] = struct{}{}
+			}
 		}
 	}
 
@@ -290,7 +344,7 @@ func top(container string) protocol.ByMemory {
 	for _, pid := range pids {
 		pr := protocol.Proc{}
 		pr.Pid = fmt.Sprint(pid)
-		process, err := gopsutil.NewProcess(pid)
+		process, err := process.NewProcess(pid)
 		if err != nil {
 			logger.Panic(err.Error())
 		}
