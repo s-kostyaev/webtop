@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/brnv/go-heaver"
 	"github.com/s-kostyaev/go-lxc"
 	"github.com/s-kostyaev/webtop-protocol"
 	"github.com/shirou/gopsutil/process"
@@ -136,23 +135,16 @@ func prepareEnvironment() {
 	}
 	webtopContainer = "webtop-" + hostname
 
-	containerList, err := heaver.List(hostname)
-	if err != nil {
-		logger.Panic(err.Error())
-	}
-
 	// if container not found
-	if _, ok := containerList[webtopContainer]; !ok {
+	_, err = lxc.GetState(webtopContainer)
+	if err != nil {
 		// create container
-		imageName := []string{"abox"}
-		_, err = heaver.Create(webtopContainer, imageName)
+		cmd := exec.Command("heaver", "-CSn", webtopContainer, "-i",
+			"abox-webtop")
+		err = cmd.Run()
 		if err != nil {
 			logger.Panic(err.Error())
 		}
-		// TODO: install webserver
-
-		// TODO: enable and start webserver unit
-
 	}
 	webtopContainerRootFs, err = lxc.GetRootFS(webtopContainer)
 	if err != nil {
@@ -313,17 +305,22 @@ func NewContainerTop(name string, limit int) protocol.ContainerTop {
 
 func getContainerTopByIp(ip string) protocol.ContainerTop {
 	result := protocol.ContainerTop{}
-	containers, err := heaver.List("local")
+	containers, err := lxc.GetContainers()
 	if err != nil {
 		logger.Error(err.Error())
 	}
 	for _, container := range containers {
-		if container.Ip == ip {
-			limit, err := lxc.GetMemoryLimit(container.Name)
+		containerIp, err := lxc.GetConfigItem(container, "lxc.network.ipv4")
+		if err != nil {
+			logger.Error(err.Error())
+			continue
+		}
+		if trimNetmask(containerIp) == ip {
+			limit, err := lxc.GetMemoryLimit(container)
 			if err != nil {
 				logger.Error(err.Error())
 			}
-			result = NewContainerTop(container.Name, limit)
+			result = NewContainerTop(container, limit)
 			break
 		}
 	}
@@ -331,6 +328,10 @@ func getContainerTopByIp(ip string) protocol.ContainerTop {
 		logger.Error("Cannot associate resolved IP to container")
 	}
 	return result
+}
+
+func trimNetmask(ip string) string {
+	return strings.Split(ip, "/")[0]
 }
 
 func top(container string) protocol.ByMemory {
