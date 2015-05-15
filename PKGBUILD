@@ -1,6 +1,6 @@
 # Maintainer:  <s-kostyaev@ngs>
 pkgname=webtop-git
-pkgver=0.5.0
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="web-based top for cgroup"
 arch=('i686' 'x86_64')
